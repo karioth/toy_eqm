@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 
 try:
     from tqdm.auto import tqdm
@@ -25,10 +26,7 @@ from eval_toy import render_eval_video_from_checkpoint, render_summary_png_from_
 def huber_mean(e, delta):
     if delta <= 0:
         raise ValueError("huber_delta must be > 0")
-    abs_e = e.abs()
-    quadratic = 0.5 * e * e
-    linear = delta * (abs_e - 0.5 * delta)
-    return torch.where(abs_e <= delta, quadratic, linear).mean(dim=-1)
+    return F.huber_loss(e, torch.zeros_like(e), delta=delta, reduction="none").mean(dim=-1)
 
 
 def train_live(

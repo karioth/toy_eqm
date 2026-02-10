@@ -150,7 +150,7 @@ if __name__ == "__main__":
     train_live(
         tau=1.0,
         reweight_attr="inv",
-        reweight_rep="inv",
+        reweight_rep="none",
         eval_step_size=0.7,
         eval_num_samples=100000,
         eval_num_steps=20,

@@ -102,11 +102,13 @@ def lp_norm(x, alpha=1.0, eps=1e-12):
     return n.pow(alpha)
 
 
-def attraction_weight(gamma, mode="none"):
+def attraction_weight(gamma, mode="none", bias=0.05, power=1.0):
+    if bias < 0:
+        raise ValueError("bias must be >= 0")
     g = gamma.squeeze(-1)
     d = 1.0 - g
     if mode == "inv":
-        return 1.0 / (d + 0.05)
+        return 1.0 / (d + bias).pow(power)
     if mode == "none":
         return torch.ones_like(g)
     raise ValueError("reweight_mode must be 'inv' or 'none'")
@@ -239,16 +241,18 @@ def plot_landing_quality(model, device, ax, spiral_ref,
 
 def plot_dist_improvement(model, device, ax, spiral_ref, B=4000, turns=3.0,
                           r_max=3.0, mean=None, std=None):
-    z1, _, _, _ = sample_pair_batch(
+    z1, _, _, gamma = sample_pair_batch(
         B, device, turns=turns, r_max=r_max, mean=mean, std=std)
     _, xpred_in = field_and_prediction(model, z1)
     z1_orig = denormalize(z1, mean, std)
     xpred = denormalize(xpred_in, mean, std)
     dz = dist_to_spiral(z1_orig, spiral_ref).squeeze(-1).detach().cpu()
     dp = dist_to_spiral(xpred, spiral_ref).squeeze(-1).detach().cpu()
+    gam = gamma.squeeze(-1).detach().cpu()
 
     ax.clear()
-    ax.scatter(dz.numpy(), dp.numpy(), s=1, alpha=0.3, c="steelblue")
+    ax.scatter(dz.numpy(), dp.numpy(), s=1, alpha=0.3, c=gam.numpy(),
+               cmap="coolwarm", vmin=0, vmax=1)
     mx = max(dz.max().item(), dp.max().item()) * 1.05
     ax.plot([0, mx], [0, mx], "k--", lw=0.8, alpha=0.5)
     ax.set_xlabel("dist(z, spiral)")
@@ -259,22 +263,35 @@ def plot_dist_improvement(model, device, ax, spiral_ref, B=4000, turns=3.0,
     ax.set_aspect("equal", "box")
 
 
+def plot_f_along_spiral(model, device, ax, spiral_ref, mean=None, std=None):
+    pts_in = normalize(spiral_ref, mean, std)
+    fz, _ = field_and_prediction(model, pts_in)
+    fz = fz * std
+    mag = torch.linalg.norm(fz, dim=-1).detach().cpu()
+    ax.clear()
+    ax.plot(mag.numpy(), lw=1.0, c="steelblue")
+    ax.set_title("||f|| along spiral")
+    ax.set_xlabel("spiral index")
+    ax.set_ylabel("||f||")
+
+
 def save_summary_panel_png(
     model, device, spiral_ref, mean, std,
     out_path, title=None,
     turns=3.0, r_max=3.0,
 ):
-    fig, axes = plt.subplots(1, 5, figsize=(22, 4.2))
-    fig.subplots_adjust(wspace=0.32)
+    fig, axes = plt.subplots(2, 3, figsize=(18, 8))
+    fig.subplots_adjust(wspace=0.34, hspace=0.28)
     if title:
         fig.suptitle(title, fontsize=10)
 
-    ax_field, ax_energy, ax_landing, ax_xpred, ax_dist = axes
+    ax_field, ax_energy, ax_landing, ax_xpred, ax_dist, ax_fspiral = axes.ravel()
     plot_quiver_field(model, device, ax_field, spiral_ref, mean=mean, std=std)
     plot_energy_landscape(model, device, ax_energy, spiral_ref, mean=mean, std=std)
     plot_landing_quality(model, device, ax_landing, spiral_ref, mean=mean, std=std)
     plot_pred_scatter(model, device, ax_xpred, spiral_ref, turns=turns, r_max=r_max, mean=mean, std=std)
     plot_dist_improvement(model, device, ax_dist, spiral_ref, turns=turns, r_max=r_max, mean=mean, std=std)
+    plot_f_along_spiral(model, device, ax_fspiral, spiral_ref, mean=mean, std=std)
 
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)

@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 
 try:
     from tqdm.auto import tqdm
@@ -15,12 +16,15 @@ from utils import (
     enable_tf32_if_cuda,
     field_and_prediction,
     get_device,
-    lp_norm,
     make_spiral_reference,
     sample_pair_batch,
     spiral_normalization,
 )
 from eval_toy import render_eval_video_from_checkpoint, render_summary_png_from_checkpoint
+
+
+def smoothl1_mean(e, beta):
+    return F.smooth_l1_loss(e, torch.zeros_like(e), beta=beta, reduction="none").mean(dim=-1)
 
 
 def train_live(
@@ -32,6 +36,7 @@ def train_live(
     n_ref=12000,
     alpha=0.0,
     tau=1.0,
+    smoothl1_beta=1.0,
     reweight_attr="none",
     reweight_rep="none",
     seed=0,
@@ -50,9 +55,23 @@ def train_live(
     device = get_device()
     enable_tf32_if_cuda(device)
     print(f"device: {device}")
-    print(f"alpha={alpha}, tau={tau}, reweight_attr={reweight_attr}, reweight_rep={reweight_rep}")
+    print(
+        "alpha={alpha}, tau={tau}, smoothl1_beta={smoothl1_beta}, "
+        "reweight_attr={reweight_attr}, reweight_rep={reweight_rep}".format(
+            alpha=alpha,
+            tau=tau,
+            smoothl1_beta=smoothl1_beta,
+            reweight_attr=reweight_attr,
+            reweight_rep=reweight_rep,
+        )
+    )
 
-    tag = build_tags(tau, alpha, reweight_attr, reweight_rep)
+    # alpha only affects attraction/repulsion weights in this Smooth L1 variant.
+    tag = (
+        f"smoothl1{smoothl1_beta:.3f}_"
+        + build_tags(tau, alpha, reweight_attr, reweight_rep)
+        + f"_seed{seed}"
+    )
     run_dir = Path(out_dir) / tag
     os.makedirs(run_dir, exist_ok=True)
     ckpt_path = str(run_dir / f"ckpt_{tag}.pt")
@@ -87,12 +106,12 @@ def train_live(
         w_attr = attraction_weight(gamma, mode=reweight_attr).pow(alpha)
         w_rep = attraction_weight(gamma, mode=reweight_rep).pow(alpha)
 
-        d1 = lp_norm(e1, alpha=alpha)
-        d2 = lp_norm(e2, alpha=alpha)
-        attract = (w_attr * (d1 + d2)).mean() / e1.shape[-1]
+        d1 = smoothl1_mean(e1, smoothl1_beta)
+        d2 = smoothl1_mean(e2, smoothl1_beta)
+        attract = (w_attr * (d1 + d2)).mean()
         if tau != 0.0:
-            d12 = lp_norm(e1 - e2, alpha=alpha)
-            rep = (w_rep * d12).mean() / e1.shape[-1]
+            d12 = smoothl1_mean(e1 - e2, smoothl1_beta)
+            rep = (w_rep * d12).mean()
             loss = attract - tau * rep
         else:
             rep = torch.tensor(0.0, device=device)
@@ -148,12 +167,13 @@ def train_live(
 
 if __name__ == "__main__":
     train_live(
-        tau=1.0,
+        tau=0.0,
         reweight_attr="inv",
         reweight_rep="none",
         eval_step_size=0.7,
         eval_num_samples=100000,
         eval_num_steps=20,
-        alpha = 1,
-        seed = 123,
+        alpha=1,
+        smoothl1_beta=0.0,
+        seed=0,
     )
